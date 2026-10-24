@@ -260,10 +260,13 @@ def _param_labels(k):
 
 
 def fmt(x, dec):
+    """厳密に0（構造的なゼロ）は "0"、丸めると0になるだけの小さな値は "0.0000" と書き分ける。"""
     if np.isneginf(x):
         return "−∞"
+    if abs(x) < 1e-12:
+        return "0"
     s = f"{x:.{dec}f}"
-    return "0" if float(s) == 0 else s.replace("-", "−")
+    return s.lstrip("-") if float(s) == 0 else s.replace("-", "−")
 
 
 def render_text(cp, dec, only=None, step=None):
@@ -304,7 +307,8 @@ def render_markdown(cp, dec, blank=False):
         cell = lambda v, m: ("−∞" if np.isneginf(v) else "0*") if m else " "
     else:
         head = ["# 解答集（mini_gpt.py --markdown が自動生成）", "",
-                f"数値は小数点以下{dec}桁に丸めています。手計算では有効数字4桁程度を保ち、差が ±0.002 程度なら丸め誤差とみなしてOKです。",
+                f"数値は小数点以下{dec}桁に丸めています。「0」は厳密に0（構造的に勾配が来ない等）、「0.0000」は丸めると0になるだけの小さな値です。",
+                "手計算では有効数字4桁程度を保ち、差が |自分 − 解答| ≤ 0.002 + 0.002·|解答| 程度なら丸め誤差とみなしてOKです。",
                 "これより大きくずれたら、そのチェックポイントで止まって原因を探し、以降はこの解答の値を使って先へ進んでください（誤差の伝播を防ぐ）。", ""]
         cell = lambda v, m: fmt(v, dec)
     out = head
@@ -315,14 +319,14 @@ def render_markdown(cp, dec, blank=False):
     return "\n".join(out)
 
 
-def render_params(p, lr, dec=2):
+def render_params(p, lr):
     out = ["# 初期パラメータ（mini_gpt.py --params-md が自動生成）", "",
            f"学習率 lr = {lr:g}（SGD）。正本は params.json。", ""]
     names = {"E": "トークン埋め込み E（行 = トークン）", "P": "位置埋め込み P（行 = 位置）",
              "Wq": "Wq", "Wk": "Wk", "Wv": "Wv", "Wo": "Wo（行 d0,d1 = ヘッド0 の出力、d2,d3 = ヘッド1 の出力）",
              "W1": "W1（FFN 1層目）", "W2": "W2（FFN 2層目）", "Wout": "Wout（出力層、列 = トークン）"}
     for k in PARAMS:
-        out += md_table(names[k], p[k], *_param_labels(k), lambda v, m: fmt(v, dec))
+        out += md_table(names[k], p[k], *_param_labels(k), lambda v, m: f"{v:g}".replace("-", "−"))
     return "\n".join(out)
 
 
