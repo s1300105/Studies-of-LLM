@@ -102,7 +102,8 @@ def forward(p):
     c["X2"] = c["X1"] + c["F"]
     c["logits"] = c["X2"] @ p["Wout"]
     c["probs"] = softmax(c["logits"])
-    c["nll"] = -np.log(c["probs"][np.arange(T), TGT])
+    lse = np.log(np.exp(c["logits"] - c["logits"].max(-1, keepdims=True)).sum(-1)) + c["logits"].max(-1)
+    c["nll"] = lse - c["logits"][np.arange(T), TGT]          # = -log p[正解]（logsumexp − logit）
     c["loss"] = c["nll"].mean()
     return c
 
@@ -242,10 +243,17 @@ def checkpoints(p, lr):
 
     add("7.1", "SGD更新後のパラメータ", [(f"{k}' = {k} - {lr:g}·d{k}", p1[k], *_param_labels(k)) for k in PARAMS])
     add("7.2", "損失変化の1次近似（テイラー展開）", [("‖g‖², 予測 ΔL = -lr‖g‖²", np.array([[gsq, -lr * gsq]]), ["値"], ["‖g‖²", "予測ΔL"])])
-    add("7.3", "再順伝播（主要な中間値）", [("X0'", c1["X0"], POS, DIMS), ("U1'", c1["U1"], POS, DIMS)]
+    add("7.3", "再順伝播（主要な中間値）",
+        [("X0'", c1["X0"], POS, DIMS),
+         ("μ', σ²', σ'（LN1）", np.hstack([c1["ln1"]["mu"], c1["ln1"]["var"], c1["ln1"]["sigma"]]), POS, ["μ", "σ²", "σ"]),
+         ("U1'", c1["U1"], POS, DIMS), ("Q'", c1["Q"], POS, DIMS), ("K'", c1["K"], POS, DIMS), ("V'", c1["V"], POS, DIMS)]
+        + [(f"S{h}'", c1["S"][h], POS, KEYS) for h in range(H)]
         + [(f"A{h}'", c1["A"][h], POS, KEYS) for h in range(H)]
-        + [("X1'", c1["X1"], POS, DIMS), ("U2'", c1["U2"], POS, DIMS), ("Z'", c1["Z"], POS, HID),
-           ("X2'", c1["X2"], POS, DIMS), ("logits'", c1["logits"], POS, VOCAB), ("p'", c1["probs"], POS, VOCAB)])
+        + [("Ocat'", c1["Ocat"], POS, DIMS), ("Attn'", c1["Attn"], POS, DIMS), ("X1'", c1["X1"], POS, DIMS),
+           ("μ', σ²', σ'（LN2）", np.hstack([c1["ln2"]["mu"], c1["ln2"]["var"], c1["ln2"]["sigma"]]), POS, ["μ", "σ²", "σ"]),
+           ("U2'", c1["U2"], POS, DIMS), ("Z'", c1["Z"], POS, HID), ("F'", c1["F"], POS, DIMS),
+           ("X2'", c1["X2"], POS, DIMS), ("logits'", c1["logits"], POS, VOCAB), ("p'", c1["probs"], POS, VOCAB),
+           ("-log p'[正解]", col(c1["nll"]), POS, ["nll"])])
     add("7.4", "損失の比較", [("L → L'", np.array([[c["loss"], c1["loss"], c1["loss"] - c["loss"], -lr * gsq]]), ["値"],
                               ["L（更新前）", "L'（更新後）", "実際のΔL", "予測ΔL"]),
                              ("正解トークンの確率 前→後", np.vstack([c["probs"][np.arange(T), TGT], c1["probs"][np.arange(T), TGT]]).T,
@@ -285,12 +293,17 @@ def render_text(cp, dec, only=None, step=None):
     return "\n".join(out)
 
 
-def md_table(label, M, rl, cl, cell):
+def md_escape(x):
+    return x.replace("<", "&lt;").replace(">", "&gt;")
+
+
+def md_table(label, M, rl, cl, cell, skip=None):
     M = np.atleast_2d(M)
     masked = np.broadcast_to(MASK, M.shape) if is_masked(label, M) else np.zeros(M.shape, dtype=bool)
-    out = [f"**{label}**", "", "| | " + " | ".join(cl) + " |", "|---|" + "---:|" * len(cl)]
-    out += ["| " + r + " | " + " | ".join(cell(v, m) for v, m in zip(row, mrow)) + " |"
-            for r, row, mrow in zip(rl, M, masked)]
+    skip = np.zeros(M.shape, dtype=bool) if skip is None else skip
+    out = [f"**{md_escape(label)}**", "", "| | " + " | ".join(map(md_escape, cl)) + " |", "|---|" + "---:|" * len(cl)]
+    out += ["| " + md_escape(r) + " | " + " | ".join(cell(v, m, k) for v, m, k in zip(row, mrow, krow)) + " |"
+            for r, row, mrow, krow in zip(rl, M, masked, skip)]
     return out + [""]
 
 
@@ -299,23 +312,36 @@ def is_masked(label, M):
     return M.shape == (T, T) and label.split()[0].rstrip("'").startswith(("S", "A", "dA", "dS"))
 
 
+def skip_cells(cid, label, M):
+    """手計算では求めなくてよいセル（位置0は自分しか見ないので A の0行目は常に [1, 0, 0]）。"""
+    k = np.zeros(np.atleast_2d(M).shape, dtype=bool)
+    name = label.split()[0]
+    if cid == "3.1" and name == "Q":
+        k[0] = True                      # Q の0行目は下流に一切影響しない
+    if cid == "3.2" or (cid == "6.5" and name.startswith("dA")):
+        k[0, 0] = True                   # S[0,0] と dA[0,0] は softmax(1要素) = 1 に吸収される
+    return k
+
+
 def render_markdown(cp, dec, blank=False):
     if blank:
         head = ["# 記入用シート（mini_gpt.py --blank が自動生成）", "",
-                "空欄に手計算の結果を書き込み、チェックポイントごとに answers.md と照合してください。"
-                "「−∞」「0*」は因果マスクで決まる値（計算不要）です。", ""]
-        cell = lambda v, m: ("−∞" if np.isneginf(v) else "0*") if m else " "
+                "空欄に手計算の結果を書き込み、チェックポイントごとに answers.md と照合してください。",
+                "「−∞」「0*」は因果マスクで決まる値、「—」は計算しなくてよいセルです（位置0は自分自身しか見ないので、"
+                "Q の0行目・S と dA の (t0, k0) は結果に影響しません）。", ""]
+        cell = lambda v, m, k: ("−∞" if np.isneginf(v) else "0*") if m else ("—" if k else " ")
     else:
         head = ["# 解答集（mini_gpt.py --markdown が自動生成）", "",
                 f"数値は小数点以下{dec}桁に丸めています。「0」は厳密に0（構造的に勾配が来ない等）、「0.0000」は丸めると0になるだけの小さな値です。",
                 "手計算では有効数字4桁程度を保ち、差が |自分 − 解答| ≤ 0.002 + 0.002·|解答| 程度なら丸め誤差とみなしてOKです。",
-                "これより大きくずれたら、そのチェックポイントで止まって原因を探し、以降はこの解答の値を使って先へ進んでください（誤差の伝播を防ぐ）。", ""]
-        cell = lambda v, m: fmt(v, dec)
+                "これより大きくずれたら、そのチェックポイントで止まって原因を探し、以降はこの解答の値を使って先へ進んでください（誤差の伝播を防ぐ）。",
+                "記入用シートで「—」（計算不要）としたセルにも、参考として値を載せています。", ""]
+        cell = lambda v, m, k: fmt(v, dec)
     out = head
     for cid, title, items in cp:
         out += [f"## {cid} {title}", ""]
         for label, M, rl, cl in items:
-            out += md_table(label, M, rl, cl, cell)
+            out += md_table(label, M, rl, cl, cell, skip_cells(cid, label, M))
     return "\n".join(out)
 
 
@@ -326,7 +352,7 @@ def render_params(p, lr):
              "Wq": "Wq", "Wk": "Wk", "Wv": "Wv", "Wo": "Wo（行 d0,d1 = ヘッド0 の出力、d2,d3 = ヘッド1 の出力）",
              "W1": "W1（FFN 1層目）", "W2": "W2（FFN 2層目）", "Wout": "Wout（出力層、列 = トークン）"}
     for k in PARAMS:
-        out += md_table(names[k], p[k], *_param_labels(k), lambda v, m: f"{v:g}".replace("-", "−"))
+        out += md_table(names[k], p[k], *_param_labels(k), lambda v, m, k: f"{v:g}".replace("-", "−"))
     return "\n".join(out)
 
 

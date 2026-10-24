@@ -4,6 +4,8 @@ mini_gpt.py は手計算と1対1で対応させるため入力を固定してい
   - 語彙サイズ・系列（複数可）を自由に指定できる
   - Attention / FFN / 残差 を個別に外せる（アブレーション）
   - SGD / Adam で多ステップ学習できる
+  - 因果マスクを外せる（causal=False）、LN の ε を変えられる（ln_eps=0 で mini_gpt.py と一致）
+  - 位置埋め込み P の先頭 T 行だけを使うので、P の行数以下の任意の長さで推論できる（tgt=None なら損失は計算しない）
 """
 import numpy as np
 
@@ -33,16 +35,16 @@ def init_params(vocab_size, T, d=4, ff=8, scale=0.5, seed=0):
     return {k: rng.normal(0, scale, s) for k, s in shapes.items()}
 
 
-def forward(p, inp, tgt, use_attn=True, use_ffn=True):
-    """inp, tgt: (B, T) の整数配列。"""
-    inp, tgt = np.asarray(inp), np.asarray(tgt)
+def forward(p, inp, tgt, use_attn=True, use_ffn=True, causal=True, ln_eps=1e-5):
+    """inp, tgt: (B, T) の整数配列（T ≤ P の行数）。tgt=None なら損失を計算しない（推論用）。"""
+    inp = np.asarray(inp)
     B, T = inp.shape
     d = p["E"].shape[1]
     H = d // DK
-    mask = np.triu(np.ones((T, T), dtype=bool), 1)
-    c = {"inp": inp, "tgt": tgt, "mask": mask, "H": H}
-    c["X0"] = p["E"][inp] + p["P"][None]
-    c["U1"], c["s1"] = layernorm(c["X0"])
+    mask = np.triu(np.ones((T, T), dtype=bool), 1) if causal else np.zeros((T, T), dtype=bool)
+    c = {"inp": inp, "tgt": tgt, "mask": mask, "H": H, "ln_eps": ln_eps}
+    c["X0"] = p["E"][inp] + p["P"][:T][None]
+    c["U1"], c["s1"] = layernorm(c["X0"], ln_eps)
     c["Q"], c["K"], c["V"] = c["U1"] @ p["Wq"], c["U1"] @ p["Wk"], c["U1"] @ p["Wv"]
     c["A"], O = [], []
     for h in range(H):
@@ -54,16 +56,19 @@ def forward(p, inp, tgt, use_attn=True, use_ffn=True):
     c["Ocat"] = np.concatenate(O, -1)
     c["Attn"] = c["Ocat"] @ p["Wo"] * use_attn
     c["X1"] = c["X0"] + c["Attn"]
-    c["U2"], c["s2"] = layernorm(c["X1"])
+    c["U2"], c["s2"] = layernorm(c["X1"], ln_eps)
     c["Z"] = c["U2"] @ p["W1"]
     c["R"] = np.maximum(c["Z"], 0)
     c["F"] = c["R"] @ p["W2"] * use_ffn
     c["X2"] = c["X1"] + c["F"]
     c["logits"] = c["X2"] @ p["Wout"]
     c["probs"] = softmax(c["logits"])
+    c["use"] = (use_attn, use_ffn)
+    if tgt is None:
+        return c
+    c["tgt"] = tgt = np.asarray(tgt)
     bi, ti = np.meshgrid(np.arange(B), np.arange(T), indexing="ij")
     c["loss"] = -np.log(c["probs"][bi, ti, tgt]).mean()
-    c["use"] = (use_attn, use_ffn)
     return c
 
 
@@ -100,19 +105,21 @@ def backward(p, c):
         g[name] = flat(c["U1"]).T @ flat(dM)
     dU1 = dQ @ p["Wq"].T + dK @ p["Wk"].T + dV @ p["Wv"].T
     dX0 = dX1 + layernorm_backward(dU1, c["U1"], c["s1"])
-    g["P"] = dX0.sum(0)
+    g["P"] = np.zeros_like(p["P"])
+    g["P"][:T] = dX0.sum(0)
     g["E"] = np.zeros_like(p["E"])
     np.add.at(g["E"], c["inp"], dX0)
     return g
 
 
-def train(p, inp, tgt, steps=2000, lr=0.05, optimizer="adam", use_attn=True, use_ffn=True, log_every=None):
+def train(p, inp, tgt, steps=2000, lr=0.05, optimizer="adam", use_attn=True, use_ffn=True, log_every=None, **kw):
+    """kw は forward にそのまま渡す（causal=False, ln_eps=0 など）。"""
     p = {k: v.copy() for k, v in p.items()}
     m = {k: np.zeros_like(v) for k, v in p.items()}
     v2 = {k: np.zeros_like(v) for k, v in p.items()}
     hist = []
     for s in range(1, steps + 1):
-        c = forward(p, inp, tgt, use_attn, use_ffn)
+        c = forward(p, inp, tgt, use_attn, use_ffn, **kw)
         hist.append(c["loss"])
         g = backward(p, c)
         for k in p:
@@ -124,7 +131,7 @@ def train(p, inp, tgt, steps=2000, lr=0.05, optimizer="adam", use_attn=True, use
                 p[k] -= lr * g[k]
         if log_every and s % log_every == 0:
             print(f"  step {s:5d}  loss {c['loss']:.4f}")
-    return p, forward(p, inp, tgt, use_attn, use_ffn), hist
+    return p, forward(p, inp, tgt, use_attn, use_ffn, **kw), hist
 
 
 def grad_check(p, inp, tgt, eps=1e-6, **kw):
