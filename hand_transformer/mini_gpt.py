@@ -316,9 +316,9 @@ def skip_cells(cid, label, M):
     """手計算では求めなくてよいセル（位置0は自分しか見ないので A の0行目は常に [1, 0, 0]）。"""
     k = np.zeros(np.atleast_2d(M).shape, dtype=bool)
     name = label.split()[0]
-    if cid == "3.1" and name == "Q":
+    if (cid, name) in (("3.1", "Q"), ("7.3", "Q'")):
         k[0] = True                      # Q の0行目は下流に一切影響しない
-    if cid == "3.2" or (cid == "6.5" and name.startswith("dA")):
+    if cid == "3.2" or (cid == "7.3" and name in ("S0'", "S1'")) or (cid == "6.5" and name.startswith("dA")):
         k[0, 0] = True                   # S[0,0] と dA[0,0] は softmax(1要素) = 1 に吸収される
     return k
 

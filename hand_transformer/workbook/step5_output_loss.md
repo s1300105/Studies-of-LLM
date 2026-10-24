@@ -142,4 +142,4 @@ $$\mathrm{LSE}_t = m_t + \ln\textstyle\sum_j e_{tj},\qquad \text{nll}_t = \mathr
 - [answers.md 5.2 softmax](answers.md#52-softmax)
 - [answers.md 5.3 損失](answers.md#53-損失)
 
-これで順伝播は終わりです。次はステップ6（逆伝播）。まず [derivations.md](derivations.md) で、数字を使わずに微分の式を導きます。
+これで順伝播は終わりです。次は [ステップ6 逆伝播](step6_backward.md) です。まず [derivations.md](derivations.md) で、数字を使わずに微分の式を導きます。

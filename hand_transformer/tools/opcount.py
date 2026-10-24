@@ -871,7 +871,7 @@ def emit_md(res, cps, p, path):
     for gname, lab, dval in (('forward1', '順伝播 2.1–5.3', dn['forward_total']), ('backward', '逆伝播 6.1–6.9', dn['backward_total']),
                              ('update', '更新 7.1–7.2', None), ('forward2', '再順伝播 7.3–7.4', dn['forward2_total'])):
         s = res['groups'][gname]
-        dv = f"{dval}" if dval else '180 (lr·g) + 180²'
+        dv = f"{dval}" if dval else '181（g² 180 回 + 1 回。lr = 1 なので lr·g の 180 回は数えない）'
         L.append(f"| {lab} | {dv} | {s['struct']} | {s['skip']} | {s['nontriv_mul']} | {s['dd']} | {s['sec'] / 3600:.2f} h |")
     s = res['total']
     L.append(f"| **合計** | | {s['struct']} | {s['skip']} | **{s['nontriv_mul']}** | {s['dd']} | **{s['sec'] / 3600:.2f} h** |")
