@@ -10,6 +10,8 @@
 
 照合する相手は mini_gpt.py（Part 1）と part2/mini_gpt2.py（Part 2）。API は part3/k3_matrix/my_gpt.py の冒頭を参照。
 必須は forward の "loss" と "logits"、backward の g（9個）だけで、そのほかの量は返せば照合し、無ければ「未提供」と表示する。
+書きかけでも使える：backward がまだ NotImplementedError なら順伝播だけ、g が9個そろっていなければ 6.x までを照合する
+（SGD 以降の 7.x・8.2 は9個そろってから）。--gradcheck・--autograd は OK / NG を出し、終了コードも 0 / 1 にする。
 
 判定：|自分 − 正解| ≤ tol·(1 + |正解|)（既定 tol = 1e-8。コード同士なので手計算の許容差よりずっと厳しい）。
 S はマスクされていないマスだけ、dA もマスクされていないマスだけを比べる（マスク部を −1e9 や「計算しない」で済ませてもよい）。
@@ -119,12 +121,21 @@ GROUPS = {"Wq, Wk（QK）": ["Wq", "Wk"], "Wv, Wo（OV）": ["Wv", "Wo"], "Atten
 # ---------------------------------------------------------------- 実行と比較
 
 def run_model(f_forward, f_backward, f_sgd, P):
-    """forward → backward → sgd → forward。学習者のコードが p や task を書き換えても影響しないようコピーを渡す。"""
+    """forward → backward → sgd → forward。学習者のコードが p や task を書き換えても影響しないようコピーを渡す。
+
+    backward が未実装（NotImplementedError）なら g = None、g が9個そろっていなければそろっている分だけを返し、
+    どちらの場合も SGD と2回目の forward は飛ばす（p1 = c1 = None）。照合は、計算できた範囲だけで行う。
+    """
     p, lr = P["p"], P["lr"]
     c = f_forward(copy.deepcopy(p), learner_task(P))
-    out = f_backward(copy.deepcopy(p), c)
+    try:
+        out = f_backward(copy.deepcopy(p), c)
+    except NotImplementedError as e:
+        return {"c": c, "g": None, "d": {}, "p1": None, "c1": None, "why": str(e)}
     g, d = out if isinstance(out, tuple) else (out, {})
-    g = {k: np.asarray(g[k], dtype=float) for k in m.PARAMS}
+    g = {k: np.asarray(g[k], dtype=float) for k in m.PARAMS if k in g}
+    if len(g) < len(m.PARAMS):
+        return {"c": c, "g": g, "d": d or {}, "p1": None, "c1": None}
     p1 = f_sgd(copy.deepcopy(p), g, lr) if f_sgd else {k: p[k] - lr * g[k] for k in m.PARAMS}
     p1 = {k: np.asarray(p1[k], dtype=float) for k in m.PARAMS}
     c1 = f_forward(copy.deepcopy(p1), learner_task(P))
@@ -242,9 +253,10 @@ def check_part(P, mod, tol, verbose):
         L = run_model(mod.forward, mod.backward, getattr(mod, "sgd", None), P)
     except NotImplementedError as e:
         print(f"  未実装: {e}")
-        return {"ok": 0, "ng": 1, "skip": 0, "first": "（実行できず）"}
+        return {"ok": 0, "ng": 1, "skip": 0, "first": "（実行できず）", "unimpl": str(e)}
     except Exception:  # noqa: BLE001  学習者のコードの例外はそのまま見せる
-        print("  実行中に例外が起きました（Part 1 で動くなら、N・語彙数・マスクの扱いを固定していないか確認）:")
+        hint = "（Part 1 で動くなら、N・語彙数・マスクの扱いを固定していないか確認）" if P["task"] is m2.TASK2 else ""
+        print(f"  実行中に例外が起きました{hint}:")
         print("  " + traceback.format_exc().replace("\n", "\n  "))
         return {"ok": 0, "ng": 1, "skip": 0, "first": "（実行できず）"}
     try:
@@ -253,9 +265,22 @@ def check_part(P, mod, tol, verbose):
         print('  forward の戻り値に "loss" と "logits" が必要です')
         return {"ok": 0, "ng": 1, "skip": 0, "first": "（必須の量が無い）"}
 
-    stats = {"ok": 0, "ng": 0, "skip": 0, "first": None}
+    checks = build_checks(P, L, R, mod)
+    partial = None
+    part2 = P["task"] is m2.TASK2
+    if L["g"] is None:            # backward が未実装：backward を使わない量（順伝播と 8.1）だけ照合する
+        partial = "逆伝播（6.x）以降"
+        print(f"  逆伝播がまだ無いので（{L['why']}）、順伝播（{'2.1〜5.5 と 8.1' if part2 else '2.1〜5.3'}）だけ照合します")
+        checks = [ck for ck in checks if ck[0] < "6" or ck[0] == "8.1"]
+    elif L["p1"] is None:         # g が9個そろっていない：SGD 以降は飛ばし、無い勾配は「未提供」と出す
+        partial = "SGD 以降（7.x・8.2）" if part2 else "SGD 以降（7.x）"
+        lack = [k for k in m.PARAMS if k not in L["g"]]
+        print(f"  g に {', '.join(lack)} がまだ無いので、6.x までを照合します（{partial}は9個そろってから）")
+        checks = [ck for ck in checks if ck[0] < "7" or ck[0] == "8.1"]
+
+    stats = {"ok": 0, "ng": 0, "skip": 0, "first": None, "partial": partial}
     by_cid = {}
-    for cid, name, ref, fn, kind, rows in build_checks(P, L, R, mod):
+    for cid, name, ref, fn, kind, rows in checks:
         try:
             err, where, ok, x = compare(fn(), ref, kind, P, tol)
             status = "OK" if ok else "NG"
@@ -300,14 +325,28 @@ def check_part(P, mod, tol, verbose):
     return stats
 
 
-def gradcheck(P, mod, eps=1e-6):
-    """学習者の forward だけを使った中心差分と、学習者の backward の g を比べる（mini_gpt は使わない）。"""
+def learner_grads(P, mod):
+    """学習者の forward → backward の g（無いキーは入れない）。未実装なら NotImplementedError がそのまま上がる。"""
     p = copy.deepcopy(P["p"])
     out = mod.backward(copy.deepcopy(p), mod.forward(copy.deepcopy(p), learner_task(P)))
     g = out[0] if isinstance(out, tuple) else out
+    return {k: np.asarray(g[k], dtype=float) for k in m.PARAMS if k in g}
+
+
+def gradcheck(P, mod, eps=1e-6, limit=1e-9):
+    """学習者の forward だけを使った中心差分と、学習者の backward の g を比べる（mini_gpt は使わない）。合格なら True。"""
     print(f"\n==== 数値微分チェック：{P['name']}（自分の forward の中心差分 vs 自分の backward、h = {eps:g}）====")
+    try:
+        g = learner_grads(P, mod)
+    except NotImplementedError as e:
+        print(f"  未実装: {e}（--gradcheck には forward と backward の両方が要ります）")
+        return False
+    p = copy.deepcopy(P["p"])
     worst = 0.0
     for k in m.PARAMS:
+        if k not in g:
+            print(f"  {k:5s} 未提供（backward の g に {k} がありません）")
+            continue
         e = 0.0
         for idx in np.ndindex(p[k].shape):
             q = copy.deepcopy(p)
@@ -315,33 +354,47 @@ def gradcheck(P, mod, eps=1e-6):
             lp = float(mod.forward(copy.deepcopy(q), learner_task(P))["loss"])
             q[k][idx] -= 2 * eps
             lm = float(mod.forward(copy.deepcopy(q), learner_task(P))["loss"])
-            e = max(e, abs((lp - lm) / (2 * eps) - float(np.asarray(g[k])[idx])))
+            e = max(e, abs((lp - lm) / (2 * eps) - float(g[k][idx])))
         worst = max(worst, e)
         print(f"  {k:5s} 最大誤差 {e:.1e}")
-    print(f"  全体の最大誤差 {worst:.1e}（正しければ 1e-9 程度以下。mini_gpt.py --gradcheck は 1e-10 程度）")
+    ok = worst <= limit and len(g) == len(m.PARAMS)
+    lim = f"{limit:.0e}".replace("e-0", "e-")
+    verdict = f"OK（≤ {lim}）" if ok else ("NG（g が9個そろっていない）" if worst <= limit else f"NG（> {lim}）")
+    print(f"  全体の最大誤差 {worst:.1e} → {verdict}。mini_gpt.py --gradcheck は 1e-10 程度")
+    return ok
 
 
-def autograd_check(P, mod, value_path):
-    """K1 の Value で組んだグラフ（k2_verify_part1.py の forward）の勾配と、学習者の backward の g を比べる。"""
+def autograd_check(P, mod, value_path, limit=1e-15):
+    """K1 の Value で組んだグラフ（k2_verify_part1.py の forward）の勾配と、学習者の backward の g を比べる。合格なら True。"""
     k2 = load_module(HERE / "k2_verify_part1.py")
     vm = k2.load_value_module(value_path)
     p = P["p"]
+    print(f"\n==== スカラー自動微分との照合：{P['name']}（Value: {value_path}）====")
     Pv = {k: [[vm.Value(x) for x in row] for row in p[k]] for k in m.PARAMS}
     try:
         loss = k2.forward(Pv, P["task"])
         loss.backward()
     except NotImplementedError as e:
-        print(f"\n  {value_path} に未実装の部分があります: {e}")
-        return
-    out = mod.backward(copy.deepcopy(p), mod.forward(copy.deepcopy(p), learner_task(P)))
-    g = out[0] if isinstance(out, tuple) else out
-    print(f"\n==== スカラー自動微分との照合：{P['name']}（Value: {value_path}）====")
+        print(f"  {value_path} に未実装の部分があります: {e}")
+        return False
+    try:
+        g = learner_grads(P, mod)
+    except NotImplementedError as e:
+        print(f"  未実装: {e}（--autograd には forward と backward の両方が要ります）")
+        return False
     worst = 0.0
     for k in m.PARAMS:
-        e = float(np.abs(np.array([[v.grad for v in row] for row in Pv[k]]) - np.asarray(g[k], dtype=float)).max())
+        if k not in g:
+            print(f"  {k:5s} 未提供（backward の g に {k} がありません）")
+            continue
+        e = float(np.abs(np.array([[v.grad for v in row] for row in Pv[k]]) - g[k]).max())
         worst = max(worst, e)
         print(f"  {k:5s} 最大差 {e:.1e}")
-    print(f"  全体の最大差 {worst:.1e}（正しければ 1e-15 以下。数値微分と違って打ち切り誤差が無いので、ずっと小さくなる）")
+    ok = worst <= limit and len(g) == len(m.PARAMS)
+    lim = f"{limit:.0e}".replace("e-0", "e-")
+    verdict = f"OK（≤ {lim}）" if ok else ("NG（g が9個そろっていない）" if worst <= limit else f"NG（> {lim}）")
+    print(f"  全体の最大差 {worst:.1e} → {verdict}。数値微分と違って打ち切り誤差が無いので、ずっと小さくなる")
+    return ok
 
 
 def main():
@@ -359,21 +412,29 @@ def main():
     P = parts()
     which = [1, 2] if a.part == "all" else [int(a.part)]
     if a.gradcheck or a.autograd:
+        results = []
         for k in which:
             if a.gradcheck:
-                gradcheck(P[k], mod)
+                results.append(gradcheck(P[k], mod))
             if a.autograd:
-                autograd_check(P[k], mod, Path(a.value))
-        return
+                results.append(autograd_check(P[k], mod, Path(a.value)))
+        sys.exit(0 if all(results) else 1)
     results = {k: check_part(P[k], mod, a.tol, a.verbose) for k in which}
     print("\n==== まとめ ====")
     for k, s in results.items():
-        verdict = "全チェックポイント一致" if s["ng"] == 0 else f"不一致あり（最初: {s['first']}）"
+        if s.get("unimpl"):
+            verdict = f"未実装（{s['unimpl']}）"
+        elif s["ng"]:
+            verdict = f"不一致あり（最初: {s['first']}）"
+        elif s.get("partial"):
+            verdict = f"照合した範囲は一致（{s['partial']}はまだ照合していません）"
+        else:
+            verdict = "全チェックポイント一致"
         print(f"  Part {k}: {verdict}。合格 {s['ok']}、未提供 {s['skip']}")
-    if any(s["ng"] for s in results.values()):
+    if any(s["ng"] and not s.get("unimpl") for s in results.values()):
         print("  ヒント: 最初にずれたチェックポイントの1つ前までは正しい。Part 1 のずれ方は python3 extras/bug_signatures.py の表と見比べる。")
         print("         --gradcheck で自分の forward と backward が整合しているか（＝ずれが順伝播側か逆伝播側か）も分かる。")
-    sys.exit(1 if any(s["ng"] for s in results.values()) else 0)
+    sys.exit(1 if any(s["ng"] or s.get("partial") for s in results.values()) else 0)
 
 
 if __name__ == "__main__":

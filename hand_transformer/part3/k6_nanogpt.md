@@ -201,7 +201,9 @@ python3 $K6/numpy_forward.py --out_dir out-base --start 吾輩は猫である
 ```
 
 `numpy_forward.py` は、`c_attn.weight.T` を3等分して $W_q, W_k, W_v$ にする、`weight` を転置して $W_o, W_1, W_2$ にする、$W_\text{out} = E^\top$ にする、
-LN に γ, β と ε = 1e-5 を入れる、ReLU の代わりに GELU を使う、最後に `ln_f` を通す、の6点だけが Part 1 の `mini_gpt.py` の順伝播と違います。
+LN に γ, β と ε = 1e-5 を入れる、ReLU の代わりに GELU を使う、最後に `ln_f` を通す、
+ブロック（LN1 → Attention → LN2 → MLP）を `n_layer` 回（§3 の設定では 4 回）くり返す、ヘッドを `n_head` 本・hs 次元（§3 では 4 本・32 次元）にする（スコアは ÷√hs、マスクは入力の長さ T の T×T）、の8点だけが Part 1 の `mini_gpt.py` の順伝播と違います
+（`mini_gpt.py` の `forward()` は1層で、ヘッド数 H = 2・次元 DK = 2 がモジュールの定数です）。
 **まず自分で書いて**（`mini_gpt.py` の `forward()` を出発点にするとよい）、一致しなければこのスクリプトと比べてください。
 
 <details><summary>実際の結果</summary>

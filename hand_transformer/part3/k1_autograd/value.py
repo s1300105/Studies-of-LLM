@@ -14,13 +14,15 @@
     python3 test_value.py            # このファイルをテストする。目標：最大誤差 ≤ 1e-8
     python3 test_value.py --ref      # 参考解答（../solutions/value.py）をテストする（テスト自体の確認用）
 
-やること（TODO は5か所 + backward）:
-    1. __mul__   ∂(ab)/∂a = b, ∂(ab)/∂b = a
-    2. __pow__   定数乗 x**k（k は int / float）。∂(x^k)/∂x = k x^(k-1)
-    3. exp       ∂e^x/∂x = e^x
-    4. log       ∂ln x/∂x = 1/x
-    5. relu      ∂relu(x)/∂x = [x > 0]（x = 0 では 0 とする。Part 1 と同じ）
-    6. backward  トポロジカル順に並べ、出力 → 入力の順に _backward を呼ぶ
+やること（TODO は5か所 + backward。この順に書くと、テストの OK が少しずつ増えます）:
+    まず 6. backward  トポロジカル順に並べ、出力 → 入力の順に _backward を呼ぶ。
+                      テストはすべて backward() を呼ぶので、これが無いと見本の + も NG のまま（書けば「a + b」「a + a」が OK）
+    次に 1. __mul__   ∂(ab)/∂a = b, ∂(ab)/∂b = a
+         2. __pow__   定数乗 x**k（k は int / float）。∂(x^k)/∂x = k x^(k-1)
+         3. exp       ∂e^x/∂x = e^x
+         4. log       ∂ln x/∂x = 1/x
+         5. relu      ∂relu(x)/∂x = [x > 0]（x = 0 では 0 とする。Part 1 と同じ）
+    （1〜5 がすべて埋まると、test_value.py の「2. ランダムな式」も動きます）
 
 ルール（ここが K1 の学びどころ）:
     - _backward の中では、子（入力）の grad に **+=** で足し込む。= で上書きしない。

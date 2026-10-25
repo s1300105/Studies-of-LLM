@@ -215,10 +215,11 @@ def diagnose(p, c, terms, C, r, req, advA, advB, mir=False):
                       "Wo で書き込む向きと r を揃えてください。")
         pos = [x for x in contrib if x > 0.05 * big]
         neg = [x for x in contrib if x < -0.05 * big]
-        if pos and neg and abs(C) < 0.5 * big:
+        cancel = bool(pos and neg and abs(C) < 0.5 * big)
+        if cancel:
             hs.append("ヘッドが打ち消し合っています（寄与 " + " と ".join(fmt(x) for x in contrib) +
                       f"、和 C = {fmt(C)}）。片方のヘッドを0にするか、符号を揃えてください。")
-        if C < -EPS and not (pos and neg and abs(C) < 0.5 * big):
+        if C < -EPS and not cancel:
             hs.append(f"C = {fmt(C)} < 0：符号が逆です（猫文で 吠える 側に押している）。Wo か r の符号を反転してください。")
         weak = []
         for h in range(m.H):
@@ -241,9 +242,18 @@ def diagnose(p, c, terms, C, r, req, advA, advB, mir=False):
                           + "（5語とも差 3.9 以上あれば確実に nll < 0.1）。")
                 pair = [(j, g) for j, g in cl if j in (NAKU, HOERU)]
                 other = [VOCAB[j] for j, g in cl if j not in (NAKU, HOERU)]
-                if pair:
+                if pair and C >= 4.5 and pair[0][1] < C / 2 - EPS:
+                    center = (gap(c, A2) + gap(c, B2)) / 2
+                    hs.append(f"  → {nm} t2 では 正解 と {VOCAB[pair[0][0]]} の logit 差が {fmt(pair[0][1])} しかありません。C = {fmt(C)} は足りていますが、"
+                              f"2文の (鳴く − 吠える) の中心 (猫文 + 犬文)/2 = {fmt(center)} が 0 からずれています。"
+                              f"r が2文に共通の t2 の残差を読んでいるためです（X0[t2]·r = {fmt(c['X0'][A2] @ r)}）。"
+                              "r を X0[t2] = (−1, −1, 1, 1) と直交させてください。")
+                elif pair and C > EPS and not cancel:
                     hs.append(f"  → {nm} t2 では 正解 と {VOCAB[pair[0][0]]} の logit 差が {fmt(pair[0][1])} しかありません（文脈の差 C 不足）。"
                               "他の4語を十分押さえたとしても C > 4.5（片文あたり差 > 2.25）が必要です。Wv・Wo・r のどれかを大きくしてください。")
+                elif pair:
+                    hs.append(f"  → {nm} t2 では 正解 と {VOCAB[pair[0][0]]} の logit 差が {fmt(pair[0][1])} です。"
+                              "Wv・Wo・r を大きくしても直りません。先に上の符号・向き・打ち消し合いの問題を直してください。")
                 if other:
                     hs.append(f"  → {nm} t2 で {'・'.join(other)} が近すぎます（鳴く・吠える の共通の底上げ不足）。Wout の 鳴く・吠える 列に"
                               f" t2 を読む成分（d2 + d3 方向：t2 で +2、t0 で −2）を足すか、{'・'.join(other)} の列を t2 で下げましょう。")
@@ -251,7 +261,8 @@ def diagnose(p, c, terms, C, r, req, advA, advB, mir=False):
         for row, nm in t1rows:
             if c["nll"][row] >= THR:
                 j, g = rival(c, row)
-                msg = f"[発展A] {nm} t1：2番手は {VOCAB[j]}（が との logit 差 {fmt(g)}、目安 ≥ 3.9）。"
+                rank = "1番手（予測）" if g < 0 else "2番手"
+                msg = f"[発展A] {nm} t1：{rank}は {VOCAB[j]}（が との logit 差 {fmt(g)}、目安 ≥ 3.9）。"
                 if j in (NAKU, HOERU):
                     msg += (f"t1 の残差にも名詞があるので r が t1 で 鳴く/吠える を押しています（X0[t1]·r = {fmt(c['X0'][row] @ r)}）。"
                             "が の列に t1 を読む成分（d2 − d3 方向）を大きめに足すか、r を小さくして Wo を大きくしましょう。")
