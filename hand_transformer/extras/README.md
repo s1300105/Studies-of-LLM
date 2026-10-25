@@ -25,8 +25,8 @@
 | C1 | Pre-LN と Post-LN（深いモデル、warmup） | コード | 45分 | `python3 extras/pre_post_ln.py` |
 | C2 | sin/cos 位置埋め込みと RoPE | 手＋コード | 30分 | `python3 extras/positional.py` |
 | C3 | 重み共有 Wout = Eᵀ | 手＋コード | 30分 | `python3 extras/weight_tying.py` |
-| C4 | 2層で生まれる induction head | 読む | 1〜2時間 | — |
-| C5 | nanoGPT / Karpathy「Let's build GPT」 | 読む＋コード | 半日〜 | — |
+| C4 | 2層で生まれる induction head | 読む | 1〜2時間 | 実験は Part 3 の K7・K8 |
+| C5 | nanoGPT / Karpathy「Let's build GPT」 | 読む＋コード | 半日〜 | 実験は Part 3 の K6 |
 | C6 | 2つのヘッドを同じ初期値にする（対称性） | コード | 15分 | `python3 extras/symmetry.py` |
 
 おすすめの順番は M1 → M2 → M3 → S1 → S2 → S3 → M4 です（M4 は時間がかかるので、S 系を先にやってもかまいません）。
@@ -600,7 +600,7 @@ lr = 0.1 なら、200ステップで共有なしと同じ 0.0014 に追いつき
 本編の1層モデルではこれができないことと、残差ストリームが「層をまたぐ通信路」であることが分かります。
 C1 の `pre_post_ln.py` で学習させた「1つ前のトークンを答える」タスクは、この前半（previous-token head）にあたります。
 
-**手 / コード・時間**：読む、1〜2時間。実装するなら `pre_post_ln.py` の2層 Pre-LN モデルに「A B … A → B」型のランダム系列を学習させるのが近道です（このリポジトリでは未実装）。
+**手 / コード・時間**：読む、1〜2時間。実装と実験は Part 3 の [K7](../part3/k7_induction/README.md)（2層 attention-only を学習させて induction head の出現を見る）と [K8](../part3/k8_handbuilt/README.md)（重みを手で組む）にあります。
 
 **参考**：Elhage et al.「A Mathematical Framework for Transformer Circuits」(2021)、Olsson et al.「In-context Learning and Induction Heads」(2022)。
 
@@ -615,7 +615,7 @@ C1 の `pre_post_ln.py` で学習させた「1つ前のトークンを答える�
 LN1/LN2 = `ln_1`/`ln_2`、最終 LN = `ln_f`、Wout = `lm_head`。nanoGPT は `lm_head` と `wte` を共有＝C3）。
 本編で省いたもの（バイアス、GELU、dropout、最終 LN、学習率スケジュール、バッチ）が、実物のどこに入っているかを確かめてください。
 
-**手 / コード・時間**：動画 約2時間＋コード 半日〜
+**手 / コード・時間**：動画 約2時間＋コード 半日〜。日本語の文字単位で実際に学習させる手順と比較実験は Part 3 の [K6](../part3/k6_nanogpt.md) にあります。
 
 ---
 

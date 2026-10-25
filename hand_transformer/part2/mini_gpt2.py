@@ -247,24 +247,27 @@ def param_labels(k):
     return rows, cols
 
 
-SHARED = {  # 順伝播で「猫文の行と同じ」になる犬文の行（計算は1回でよい）
-    **{cid: [3] for cid in ("2.1", "2.2", "2.3", "3.4", "3.5", "4.1", "4.2", "4.3", "4.4", "4.5", "5.1", "5.2")},
-    "3.1": [3, 5],
-}
+FORWARD_CPS = {"2.1", "2.2", "2.3", "3.1", "3.4", "3.5", "4.1", "4.2", "4.3", "4.4", "4.5", "5.1", "5.2", "7.3"}
+
+
+def shared_rows(cid, M):
+    """順伝播の表で、犬文の行が猫文の同じ位置の行と（厳密に）等しい行番号。計算は1回でよい。"""
+    if cid not in FORWARD_CPS or M.shape[0] != N:
+        return []
+    return [i for i in range(3, N) if np.allclose(M[i], M[i - 3], atol=1e-12, rtol=0)]
 
 
 def skip_cells(cid, label, M):
     """記入用シートの印：'—' = 計算不要、'＝猫文' = 猫文の同じ位置の行と同じ値。"""
-    k = np.full(np.atleast_2d(M).shape, "", dtype=object)
+    M = np.atleast_2d(M)
+    k = np.full(M.shape, "", dtype=object)
     name = label.split()[0]
-    if k.shape[0] == N:
-        if cid in SHARED and not name.startswith("P["):
-            k[SHARED[cid]] = "＝猫文"
-            if cid == "2.1" and name == "E[ids]":
-                k[5] = "＝猫文"
-        if (cid, name) in (("3.1", "Q"), ("7.3", "Q'")):
-            k[[0, 3]] = "—"                              # t0 のクエリは結果に影響しない
-    if k.shape == (3, 3) and (cid in ("3.2",) or (cid == "7.3" and name.startswith("S")) or (cid == "6.5" and name.startswith("dA"))):
+    if not name.startswith(("P[", "-log")):          # P は共有の表引き、nll は正解が違うので印を付けない
+        for i in shared_rows(cid, M):
+            k[i] = "＝猫文"
+    if M.shape[0] == N and (cid, name) in (("3.1", "Q"), ("7.3", "Q'")):
+        k[[0, 3]] = "—"                              # t0 のクエリは結果に影響しない
+    if M.shape == (3, 3) and (cid in ("3.2",) or (cid == "7.3" and name.startswith("S")) or (cid == "6.5" and name.startswith("dA"))):
         k[0, 0] = "—"
     return k
 
@@ -304,6 +307,16 @@ def render_params(p, lr):
     return "\n".join(out)
 
 
+def predictions(c, tol=1e-9):
+    """各行の argmax。上位2つが（丸め誤差を除いて）同率なら「猫=犬」のように両方を書く。"""
+    out = []
+    for row in c["probs"]:
+        top = np.argsort(-row)
+        i, j = sorted(top[:2])
+        out.append(f"{VOCAB[i]}={VOCAB[j]}" if row[top[0]] - row[top[1]] < tol else VOCAB[top[0]])
+    return " ".join(out)
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser()
@@ -316,7 +329,7 @@ def main():
     ap.add_argument("--params-md", action="store_true")
     ap.add_argument("--gradcheck", action="store_true")
     ap.add_argument("--train", type=int, metavar="STEPS")
-    ap.add_argument("--lr", type=float)
+    ap.add_argument("--lr", type=float, help="多ステップ学習（--train）は lr = 1 だと約20ステップ後に丸め誤差で対称性が崩れて不安定になる。0.3 程度を推奨")
     a = ap.parse_args()
     p, lr = load_params(a.params)
     lr = a.lr if a.lr is not None else lr
@@ -331,8 +344,7 @@ def main():
         for s in range(a.train + 1):
             c = forward(q)
             if s % max(1, a.train // 20) == 0 or s == a.train:
-                pred = " ".join(VOCAB[i] for i in c["probs"].argmax(-1))
-                print(f"step {s:4d}  loss {c['loss']:.4f}  C {contrast(c):7.3f}  予測: {pred}")
+                print(f"step {s:4d}  loss {c['loss']:.4f}  C {contrast(c):7.3f}  予測: {predictions(c)}")
             if s < a.train:
                 q = sgd(q, backward(q, c)[0], lr)
         return

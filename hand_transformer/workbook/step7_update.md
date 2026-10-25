@@ -530,3 +530,5 @@ p_D[正解] = 0.4328 / 0.4962 / 0.4947、nll = 0.8375 / 0.7007 / 0.7037、L_D = 
 - [7.1 更新後のパラメータ](answers.md#71-sgd更新後のパラメータ) ／ [7.2 1次近似](answers.md#72-損失変化の1次近似テイラー展開) ／ [7.3 再順伝播](answers.md#73-再順伝播主要な中間値) ／ [7.4 損失の比較](answers.md#74-損失の比較)
 - コマンドで：`python3 mini_gpt.py --step 7`、`python3 mini_gpt.py --only 7.4`
 - その先：`python3 mini_gpt.py --train 20` で同じ文を20ステップ学習させると、損失がどこまで下がるかを見られます。
+
+最後は [step8_review.md](step8_review.md) で、ノートを見ずに全体を説明し直します。

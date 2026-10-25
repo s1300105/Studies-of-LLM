@@ -4,7 +4,7 @@ Part 0〜2 では、1層の Transformer の学習1ステップを紙と電卓で
 Part 3 では同じものをコードで書き直し、**手計算と1桁も違わないこと**を確かめてから、手では届かない所（数百ステップの学習、乱数の初期値、実物の GPT、2層の回路）へ進みます。
 
 > **はじめ方（5分）**
-> 1. 必要なもの：Python 3 と NumPy（K5 だけ PyTorch が必要）。コマンドはすべて `hand_transformer/` で実行します（K1 のテストだけは `part3/k1_autograd/` で）
+> 1. 必要なもの：Python 3 と NumPy（K5 と K6 は PyTorch が必要）。コマンドはすべて `hand_transformer/` で実行します（K1 のテストだけは `part3/k1_autograd/` で）
 > 2. この README の §1（地図）・§2（いつやるか）・§3（ルール）を読む
 > 3. K1 から始める：[`k1_autograd/value.py`](k1_autograd/value.py) の TODO を埋めて、`cd part3/k1_autograd && python3 test_value.py`
 
@@ -366,8 +366,9 @@ part3/
 │   ├── value.py             ← K1 の参考解答
 │   └── my_gpt.py            ← K3 の参考解答（mini_gpt.py とは独立に書いたもの）
 ├── k6_nanogpt.md            ← K6
+├── k6_nanogpt/              ← K6 の補助（prepare_aozora.py、patch_nanogpt.py、run_experiments.sh、summarize_logs.py、numpy_forward.py）
 ├── k7_induction/            ← K7
 └── k8_handbuilt/            ← K8
 ```
 
-すべて Python 3.13 / NumPy 2.5.3 で実行して確かめてあります（K5 は PyTorch 2.14.1）。上に書いた数値は、すべてこれらのスクリプトの出力です。
+すべて Python 3.13 / NumPy 2.5.3 で実行して確かめてあります（K5・K6 は PyTorch 2.14.1）。上に書いた数値は、すべてこれらのスクリプトの出力です。
