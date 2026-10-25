@@ -1,13 +1,15 @@
 """blank.md の記入用の表を、各ステップの手順書（workbook/step*.md）の「## 記入欄」に同期する。
 
 mini_gpt.py --blank で blank.md を作り直したら、これを実行して手順書側の表も更新する:
-  python mini_gpt.py --blank > workbook/blank.md && python tools/sync_worksheets.py
+  python3 mini_gpt.py --blank > workbook/blank.md && python3 tools/sync_worksheets.py
+  python3 part2/mini_gpt2.py --blank > part2/workbook/blank.md && python3 tools/sync_worksheets.py part2/workbook
 ついでに、表や本文中の生の <s>（GitHub では取り消し線タグになる）を &lt;s&gt; に置き換える。
 """
 import re
+import sys
 from pathlib import Path
 
-WB = Path(__file__).resolve().parent.parent / "workbook"
+WB = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "workbook"
 HEAD = re.compile(r"^(#+) (\d\.\d) ")
 
 

@@ -1,12 +1,12 @@
 """Part 2（2文タスク）の NumPy 正解実装。
 
 モデルは Part 1（../mini_gpt.py）とまったく同じ。違うのはデータだけ：
-    文A: <s> 猫 が → 猫 が 鳴く
-    文B: <s> 犬 が → 犬 が 吠える
-2文を6行に積み（A の t0, t1, t2, B の t0, t1, t2）、「同じ文の、自分以前の位置」だけを見られるマスクを使う。
+    猫文: <s> 猫 が → 猫 が 鳴く
+    犬文: <s> 犬 が → 犬 が 吠える
+2文を6行に積み（猫文の t0, t1, t2、犬文の t0, t1, t2）、「同じ文の、自分以前の位置」だけを見られるマスクを使う。
 位置埋め込み P は2文で共有する（各行が P の t0, t1, t2 行を使う）。損失は6位置の平均。
 
-t2 の入力はどちらの文も「が」なので、Attention を通らない限り A と B の t2 は同じ計算になる。
+t2 の入力はどちらの文も「が」なので、Attention を通らない限り2文の t2 は同じ計算になる。
 「鳴く」か「吠える」かを決める情報は、t1（猫 / 犬）から Attention で運ばれてくるしかない。
 """
 import json
@@ -20,8 +20,8 @@ sys.path.insert(0, str(HERE.parent))
 import mini_gpt as m  # noqa: E402
 
 VOCAB = ["<s>", "猫", "犬", "が", "鳴く", "吠える"]
-INP = [0, 1, 3, 0, 2, 3]       # A: <s> 猫 が / B: <s> 犬 が
-TGT = [1, 3, 4, 2, 3, 5]       # A: 猫 が 鳴く / B: 犬 が 吠える
+INP = [0, 1, 3, 0, 2, 3]       # 猫文: <s> 猫 が / 犬文: <s> 犬 が
+TGT = [1, 3, 4, 2, 3, 5]       # 猫文: 猫 が 鳴く / 犬文: 犬 が 吠える
 POSI = [0, 1, 2, 0, 1, 2]
 SENT = [0, 0, 0, 1, 1, 1]
 N = len(INP)
@@ -29,9 +29,10 @@ MASK = np.array([[SENT[i] != SENT[j] or j > i for j in range(N)] for i in range(
 TASK2 = {"inp": INP, "tgt": TGT, "posi": POSI, "mask": MASK}
 SHAPES = dict(m.SHAPES, E=(len(VOCAB), m.D), Wout=(m.D, len(VOCAB)))
 PARAMS = list(SHAPES)
-ROWS = [f"{'AB'[s]}{t} {VOCAB[i]}" for s, t, i in zip(SENT, POSI, INP)]
+SNAME = ["猫文", "犬文"]
+ROWS = [f"{SNAME[s]} t{t} {VOCAB[i]}" for s, t, i in zip(SENT, POSI, INP)]
 I_NAKU, I_HOERU = VOCAB.index("鳴く"), VOCAB.index("吠える")
-A2, B2, A1, B1 = 2, 5, 1, 4    # 行番号：A の t2, B の t2, A の t1, B の t1
+A2, B2, A1, B1 = 2, 5, 1, 4    # 行番号：猫文の t2, 犬文の t2, 猫文の t1, 犬文の t1
 
 
 def load_params(path=HERE / "params.json"):
@@ -55,7 +56,7 @@ def sgd(p, g, lr):
 
 
 def contrast(c):
-    """文脈の使い分け：(鳴く − 吠える) の logit 差が、文A の t2 と文B の t2 でどれだけ違うか。"""
+    """文脈の使い分け：(鳴く − 吠える) の logit 差が、猫文の t2 と犬文の t2 でどれだけ違うか。"""
     lg = c["logits"]
     return (lg[A2, I_NAKU] - lg[A2, I_HOERU]) - (lg[B2, I_NAKU] - lg[B2, I_HOERU])
 
@@ -65,17 +66,17 @@ def contrast(c):
 D, H, DK, FF = m.D, m.H, m.DK, m.FF
 DIMS, HID, KEYS = m.DIMS, m.HID, m.KEYS
 POS3 = ["t0", "t1", "t2"]
-SRC = {"<s>": 0, "A1 猫": A1, "B1 犬": B1, "が": A2}   # U1 の4種類の行（t0 と t2 は2文で共通）
-BLOCK = {"A": slice(0, 3), "B": slice(3, 6)}
+SRC = {"<s>(t0)": 0, "猫(t1)": A1, "犬(t1)": B1, "が(t2)": A2}   # U1 の4種類の行（t0 と t2 は2文で共通）
+BLOCK = {"猫文": slice(0, 3), "犬文": slice(3, 6)}
 
 
 def blocks(M, label):
     """6×6 の注意系の行列を、文ごとの 3×3 ブロック2枚に分ける（文をまたぐ部分は常にマスク）。"""
-    return [(f"{label}（文{s}）", M[b, b], [ROWS[i] for i in range(N)][b], KEYS) for s, b in BLOCK.items()]
+    return [(f"{label}（{s}）", M[b, b], ROWS[b], KEYS) for s, b in BLOCK.items()]
 
 
 def ablate_t2(p, c):
-    """t2 の Attention 出力を0にしたときの t2 の logits（A と B は完全に同じになる）。"""
+    """t2 の Attention 出力を0にしたときの t2 の logits（猫文と犬文は完全に同じになる）。"""
     X1 = c["X1"].copy()
     X1[[A2, B2]] = c["X0"][[A2, B2]]
     U2, _ = m.layernorm(X1)
@@ -116,8 +117,53 @@ def contrast_items(p, c, tag=""):
     lg = c["logits"]
     ab = ablate_t2(p, c)
     return [(f"t2 の (鳴く − 吠える){tag}", np.array([[lg[A2, I_NAKU] - lg[A2, I_HOERU], lg[B2, I_NAKU] - lg[B2, I_HOERU], contrast(c)]]),
-             ["値"], ["文A", "文B", "差 C = A − B"]),
-            (f"t2 の Attention 出力を0にした logits{tag}（アブレーション）", ab, ["A2 が", "B2 が"], VOCAB)]
+             ["値"], ["猫文", "犬文", "差 C = 猫文 − 犬文"]),
+            (f"t2 の Attention 出力を0にした logits{tag}（アブレーション）", ab, [ROWS[A2], ROWS[B2]], VOCAB)]
+
+
+
+def logit_gap(lg, row):
+    return lg[row, I_NAKU] - lg[row, I_HOERU]
+
+
+def forward_patched(p, c, h, src_row, dst_row):
+    """dst_row のヘッド h の出力 O_h を src_row のものに差し替え、その後（Wo, 残差, LN2, FFN, Wout）を計算し直した logits。"""
+    O = [o.copy() for o in c["O"]]
+    O[h][dst_row] = c["O"][h][src_row]
+    X1 = c["X0"] + np.concatenate(O, axis=1) @ p["Wo"]
+    U2, _ = m.layernorm(X1)
+    X2 = X1 + np.maximum(U2 @ p["W1"], 0) @ p["W2"]
+    return X2 @ p["Wout"]
+
+
+def decomposition_items(p, c, tag=""):
+    """t2 でヘッド h が運ぶ差の分解：ΔO = (a猫 − a犬)·V猫 ＋ a犬·(V猫 − V犬)（パターン項 ＋ 値項）、と patching の効果。"""
+    r = p["Wout"][:, I_NAKU] - p["Wout"][:, I_HOERU]
+    rows, items = [], []
+    for h in range(H):
+        sl = m.head_slice(h)
+        aA, aB = c["A"][h][A2, 0:3], c["A"][h][B2, 3:6]
+        VA, VB = c["V"][0:3, sl], c["V"][3:6, sl]
+        pat, val = (aA - aB) @ VA, aB @ (VA - VB)
+        proj = lambda o: float(o @ p["Wo"][sl, :] @ r)       # Wo → Wout を通した (鳴く − 吠える) への直接効果
+        direct = proj(c["O"][h][A2] - c["O"][h][B2])
+        total = logit_gap(c["logits"], A2) - logit_gap(forward_patched(p, c, h, B2, A2), A2)
+        rows.append([proj(pat), proj(val), direct, total])
+    items.append((f"ヘッドごとの寄与{tag}（猫文 t2 − 犬文 t2 の (鳴く − 吠える) 差）", np.array(rows), [f"ヘッド{h}" for h in range(H)],
+                  ["パターン項", "値項", "直接効果", "パッチングの総効果"]))
+    return items
+
+
+def group_update_items(p, g, lr):
+    """1つの群だけを更新したら、文脈の差 C はどこまで育つか（手計算ではなくコードで見る参考表）。"""
+    groups = {"Wq, Wk（QK）": ["Wq", "Wk"], "Wv, Wo（OV）": ["Wv", "Wo"], "Wq, Wk, Wv, Wo（Attention 全部）": ["Wq", "Wk", "Wv", "Wo"],
+              "Wout だけ": ["Wout"], "W1, W2（FFN）": ["W1", "W2"], "E, P（埋め込み）": ["E", "P"], "全部": PARAMS}
+    out = []
+    for name, ks in groups.items():
+        q = {k: (p[k] - lr * g[k] if k in ks else p[k]) for k in PARAMS}
+        cq = forward(q)
+        out.append([contrast(cq), cq["loss"]])
+    return [("1つの群だけ更新したときの C と L", np.array(out), list(groups), ["C", "L"])]
 
 
 def checkpoints(p, lr):
@@ -150,6 +196,7 @@ def checkpoints(p, lr):
     add("5.2", "softmax", [("p = softmax(logits)", c["probs"], R, VOCAB)])
     add("5.3", "損失", [("-log p[正解]", col(c["nll"]), R, ["nll"]), ("L（6位置の平均）", np.array([[c["loss"]]]), ["L"], ["値"])])
     add("5.4", "文脈の使い分けとアブレーション", contrast_items(p, c))
+    add("5.5", "ヘッドの寄与を分解する（パターンと値、パッチング）", decomposition_items(p, c))
 
     add("6.1", "出力層の逆伝播", [("dlogits = (p - y) / 6", d["logits"], R, VOCAB), ("dWout = X2ᵀ dlogits", g["Wout"], DIMS, VOCAB),
                                ("dX2 = dlogits Woutᵀ", d["X2"], R, DIMS)])
@@ -172,7 +219,7 @@ def checkpoints(p, lr):
     add("6.7", "射影行列の勾配と dU1", [("dWq = U1ᵀ dQ", g["Wq"], DIMS, DIMS), ("dWk = U1ᵀ dK", g["Wk"], DIMS, DIMS),
                                    ("dWv = U1ᵀ dV", g["Wv"], DIMS, DIMS), ("dU1 = dQ Wqᵀ + dK Wkᵀ + dV Wvᵀ", d["U1"], R, DIMS)])
     add("6.8", "LayerNorm1 の逆伝播と残差の合流", [("LN1経由", d["X0_ln1"], R, DIMS), ("dX0 = dX1 + LN1経由", d["X0"], R, DIMS)])
-    add("6.9", "埋め込みの勾配", [("dP（同じ位置の A, B の行を足す）", g["P"], POS3, DIMS), ("dE（使われた行にだけ加算）", g["E"], VOCAB, DIMS)])
+    add("6.9", "埋め込みの勾配", [("dP（同じ位置の2文の行を足す）", g["P"], POS3, DIMS), ("dE（使われた行にだけ加算）", g["E"], VOCAB, DIMS)])
 
     add("7.1", "SGD更新後のパラメータ", [(f"{k}' = {k} - {lr:g}·d{k}", p1[k], *param_labels(k)) for k in PARAMS])
     add("7.2", "損失変化の1次近似", [("‖g‖², 予測 ΔL = -lr‖g‖²", np.array([[gsq, -lr * gsq]]), ["値"], ["‖g‖²", "予測ΔL"])])
@@ -187,7 +234,8 @@ def checkpoints(p, lr):
     add("7.4", "比較", [("L → L'", np.array([[c["loss"], c1["loss"], c1["loss"] - c["loss"], -lr * gsq]]), ["値"],
                        ["L（更新前）", "L'（更新後）", "実際のΔL", "予測ΔL"]),
                       ("正解トークンの確率 前→後", np.vstack([c["probs"][np.arange(N), TGT], c1["probs"][np.arange(N), TGT]]).T, R, ["更新前", "更新後"])]
-        + contrast_items(p1, c1, "'"))
+        + contrast_items(p1, c1, "'") + decomposition_items(p1, c1, "'"))
+    add("7.5", "どの群の更新が文脈を学ばせたか（コードで見る参考表）", group_update_items(p, g, lr))
     add("8.1", "回路で読む（更新前）", circuit_items(p, c))
     add("8.2", "回路で読む（更新後）", circuit_items(p1, c1, "'"))
     return cp
@@ -199,21 +247,21 @@ def param_labels(k):
     return rows, cols
 
 
-SHARED = {  # 順伝播で「A の行と同じ」になる B の行（計算は1回でよい）
+SHARED = {  # 順伝播で「猫文の行と同じ」になる犬文の行（計算は1回でよい）
     **{cid: [3] for cid in ("2.1", "2.2", "2.3", "3.4", "3.5", "4.1", "4.2", "4.3", "4.4", "4.5", "5.1", "5.2")},
     "3.1": [3, 5],
 }
 
 
 def skip_cells(cid, label, M):
-    """記入用シートの印：'—' = 計算不要、'=' = A の同じ位置の行と同じ値。"""
+    """記入用シートの印：'—' = 計算不要、'＝猫文' = 猫文の同じ位置の行と同じ値。"""
     k = np.full(np.atleast_2d(M).shape, "", dtype=object)
     name = label.split()[0]
     if k.shape[0] == N:
         if cid in SHARED and not name.startswith("P["):
-            k[SHARED[cid]] = "＝A"
+            k[SHARED[cid]] = "＝猫文"
             if cid == "2.1" and name == "E[ids]":
-                k[5] = "＝A"
+                k[5] = "＝猫文"
         if (cid, name) in (("3.1", "Q"), ("7.3", "Q'")):
             k[[0, 3]] = "—"                              # t0 のクエリは結果に影響しない
     if k.shape == (3, 3) and (cid in ("3.2",) or (cid == "7.3" and name.startswith("S")) or (cid == "6.5" and name.startswith("dA"))):
@@ -224,7 +272,7 @@ def skip_cells(cid, label, M):
 def render_markdown(cp, dec=4, blank=False):
     if blank:
         out = ["# Part 2 記入用シート（mini_gpt2.py --blank が自動生成）", "",
-               "「−∞」「0*」は因果マスクで決まる値、「—」は計算しなくてよいセル、「＝A」は文A の同じ位置の行と同じ値になるセルです"
+               "「−∞」「0*」は因果マスクで決まる値、「—」は計算しなくてよいセル、「＝猫文」は猫文の同じ位置の行と同じ値になるセルです"
                "（t0 は2文とも `<s>` だけを見るので順伝播は全部同じ。t2 は Attention の前までは同じ）。", ""]
     else:
         out = ["# Part 2 解答集（mini_gpt2.py --markdown が自動生成）", "",
