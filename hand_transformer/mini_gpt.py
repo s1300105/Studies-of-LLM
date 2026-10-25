@@ -38,6 +38,9 @@ SHAPES = {"E": (5, 4), "P": (3, 4), "Wq": (4, 4), "Wk": (4, 4), "Wv": (4, 4),
           "Wo": (4, 4), "W1": (4, 8), "W2": (8, 4), "Wout": (4, 5)}
 PARAMS = list(SHAPES)
 MASK = np.triu(np.ones((T, T), dtype=bool), 1)   # True = 未来（見てはいけない）
+# 学習データ（タスク）。行 = 位置。posi は各行が使う位置埋め込み P の行番号。
+# Part 2（2文タスク）は2文を6行に積み、文をまたぐ注意も禁じた mask を渡す（part2/mini_gpt2.py）。
+TASK1 = {"inp": INP, "tgt": TGT, "posi": list(range(T)), "mask": MASK}
 
 POS = [f"t{t} {VOCAB[i]}" for t, i in enumerate(INP)]
 DIMS = [f"d{j}" for j in range(D)]
@@ -79,16 +82,17 @@ def head_slice(h):
 
 # ---------------------------------------------------------------- 順伝播・逆伝播
 
-def forward(p):
-    c = {}
-    c["X0"] = p["E"][INP] + p["P"]
+def forward(p, task=TASK1):
+    inp, tgt, mask = task["inp"], task["tgt"], task["mask"]
+    c = {"task": task}
+    c["X0"] = p["E"][inp] + p["P"][task["posi"]]
     c["U1"], c["ln1"] = layernorm(c["X0"])
     c["Q"], c["K"], c["V"] = c["U1"] @ p["Wq"], c["U1"] @ p["Wk"], c["U1"] @ p["Wv"]
     c["S"], c["A"], c["O"] = [], [], []
     for h in range(H):
         sl = head_slice(h)
         S = c["Q"][:, sl] @ c["K"][:, sl].T / np.sqrt(DK)
-        S = np.where(MASK, -np.inf, S)
+        S = np.where(mask, -np.inf, S)
         c["S"].append(S)
         c["A"].append(softmax(S))
         c["O"].append(c["A"][h] @ c["V"][:, sl])
@@ -103,17 +107,19 @@ def forward(p):
     c["logits"] = c["X2"] @ p["Wout"]
     c["probs"] = softmax(c["logits"])
     lse = np.log(np.exp(c["logits"] - c["logits"].max(-1, keepdims=True)).sum(-1)) + c["logits"].max(-1)
-    c["nll"] = lse - c["logits"][np.arange(T), TGT]          # = -log p[正解]（logsumexp − logit）
+    c["nll"] = lse - c["logits"][np.arange(len(inp)), tgt]   # = -log p[正解]（logsumexp − logit）
     c["loss"] = c["nll"].mean()
     return c
 
 
 def backward(p, c):
     """手計算と同じ順序で勾配を計算する。g: パラメータ勾配, d: 中間変数の勾配。"""
+    task = c["task"]
+    inp, mask, n = task["inp"], task["mask"], len(task["inp"])
     g, d = {}, {}
-    Y = np.zeros((T, V))
-    Y[np.arange(T), TGT] = 1.0
-    d["logits"] = (c["probs"] - Y) / T                     # softmax+CE の微分（÷3 は平均）
+    Y = np.zeros_like(c["probs"])
+    Y[np.arange(n), task["tgt"]] = 1.0
+    d["logits"] = (c["probs"] - Y) / n                     # softmax+CE の微分（÷3 は平均）
     g["Wout"] = c["X2"].T @ d["logits"]
     d["X2"] = d["logits"] @ p["Wout"].T
     d["F"] = d["X2"]                                        # 残差: 勾配はそのままコピー
@@ -128,12 +134,12 @@ def backward(p, c):
     g["Wo"] = c["Ocat"].T @ d["Attn"]
     d["Ocat"] = d["Attn"] @ p["Wo"].T
     d["A"], d["S"] = [], []
-    d["Q"], d["K"], d["V"] = np.zeros((T, D)), np.zeros((T, D)), np.zeros((T, D))
+    d["Q"], d["K"], d["V"] = np.zeros((n, D)), np.zeros((n, D)), np.zeros((n, D))
     for h in range(H):
         sl = head_slice(h)
         dO = d["Ocat"][:, sl]
         A = c["A"][h]
-        dA = np.where(MASK, 0.0, dO @ c["V"][:, sl].T)
+        dA = np.where(mask, 0.0, dO @ c["V"][:, sl].T)
         d["V"][:, sl] = A.T @ dO
         dS = A * (dA - (dA * A).sum(-1, keepdims=True))     # softmax の微分（行ごと）
         d["A"].append(dA)
@@ -146,10 +152,10 @@ def backward(p, c):
     d["U1"] = d["Q"] @ p["Wq"].T + d["K"] @ p["Wk"].T + d["V"] @ p["Wv"].T
     d["X0_ln1"] = layernorm_backward(d["U1"], c["U1"], c["ln1"]["sigma"])
     d["X0"] = d["X1"] + d["X0_ln1"]
-    g["P"] = d["X0"].copy()
-    g["E"] = np.zeros((V, D))
-    for t, i in enumerate(INP):
-        g["E"][i] += d["X0"][t]
+    g["P"] = np.zeros_like(p["P"])
+    np.add.at(g["P"], task["posi"], d["X0"])               # 同じ位置の行の勾配を足し込む
+    g["E"] = np.zeros_like(p["E"])
+    np.add.at(g["E"], inp, d["X0"])                        # 使われたトークンの行にだけ足し込む
     return g, d
 
 
@@ -157,16 +163,16 @@ def sgd(p, g, lr):
     return {k: p[k] - lr * g[k] for k in PARAMS}
 
 
-def grad_check(p, g, eps=1e-6):
+def grad_check(p, g, eps=1e-6, task=TASK1):
     worst = {}
     for k in PARAMS:
         err = 0.0
         for idx in np.ndindex(p[k].shape):
             q = {kk: vv.copy() for kk, vv in p.items()}
             q[k][idx] += eps
-            lp = forward(q)["loss"]
+            lp = forward(q, task)["loss"]
             q[k][idx] -= 2 * eps
-            lm = forward(q)["loss"]
+            lm = forward(q, task)["loss"]
             err = max(err, abs((lp - lm) / (2 * eps) - g[k][idx]))
         worst[k] = err
     return worst
