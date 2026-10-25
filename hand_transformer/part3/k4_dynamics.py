@@ -1,7 +1,7 @@
 """K4 2文タスクの学習ダイナミクス（参考実験。自分の K3 実装で同じ表を再現する）。
 
 Part 2 では1ステップだけ手で回した。ここでは同じモデル・同じデータで数百ステップ回し、
-「文脈の差 C がどう育つか」「どのヘッドが何を運ぶようになるか」「readout・OV・QK のどれが先に動くか」を見る。
+「文脈の差 C がどう育つか」「どのヘッドが何を運ぶようになるか」「readout・OV・QK のどれが先に動き、どれが先に頭打ちになるか」を見る。
 
     python3 part3/k4_dynamics.py                      # 全部（数十秒）
     python3 part3/k4_dynamics.py --section main       # part2/params.json から SGD と Adam で 300 ステップ
@@ -234,7 +234,7 @@ def section_main(p0, steps, csv=None):
               "QK（移植で C が育つ）": half_time([r["C_QK"] for r in rows]),
               "OV（移植で C が育つ）": half_time([r["C_OV"] for r in rows])}
         order = " → ".join(k.split("（")[0] for k, _ in sorted(th.items(), key=lambda kv: (kv[1] is None, kv[1])))
-        print("  半分まで動いたステップ: " + "、".join(f"{k} {v}" for k, v in th.items()) + f"  ⇒ 動く順: {order}")
+        print("  半分まで動いたステップ: " + "、".join(f"{k} {v}" for k, v in th.items()) + f"  ⇒ 最大値の半分に届いた順（頭打ちの順）: {order}")
         print(f"  readout だけの移植で C は最後まで {max(abs(r['C_readout']) for r in rows):.1e}"
               "（初期値の t2 の残差ストリームは2文で同じなので、出力層だけでは文脈を使えない）")
         ov_win = sum(r["C_OV"] > r["C_QK"] for r in rows[1:])
