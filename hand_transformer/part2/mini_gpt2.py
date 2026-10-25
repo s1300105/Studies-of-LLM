@@ -276,7 +276,8 @@ def render_markdown(cp, dec=4, blank=False):
     if blank:
         out = ["# Part 2 記入用シート（mini_gpt2.py --blank が自動生成）", "",
                "「−∞」「0*」は因果マスクで決まる値、「—」は計算しなくてよいセル、「＝猫文」は猫文の同じ位置の行と同じ値になるセルです"
-               "（t0 は2文とも `<s>` だけを見るので順伝播は全部同じ。t2 は Attention の前までは同じ）。", ""]
+               "（t0 は2文とも `<s>` だけを見るので順伝播は全部同じ。t2 は Attention の前までは同じで、この初期値では Attn[t2] = 0 なので 3.5 以降も同じ。"
+               "ほかに、ミラー規則で値が変わらない行（犬文 t1 の Q, K, μ, σ, Z, R, F など）にも付きます）。", ""]
     else:
         out = ["# Part 2 解答集（mini_gpt2.py --markdown が自動生成）", "",
                f"数値は小数点以下{dec}桁。「0」は厳密に0、「0.0000」は丸めると0になる小さな値。許容差は |自分 − 解答| ≤ 0.002 + 0.002·|解答|。", ""]
@@ -329,7 +330,7 @@ def main():
     ap.add_argument("--params-md", action="store_true")
     ap.add_argument("--gradcheck", action="store_true")
     ap.add_argument("--train", type=int, metavar="STEPS")
-    ap.add_argument("--lr", type=float, help="多ステップ学習（--train）は lr = 1 だと約20ステップ後に丸め誤差で対称性が崩れて不安定になる。0.3 程度を推奨")
+    ap.add_argument("--lr", type=float, help="多ステップ学習（--train）では lr が大きいと丸め誤差で2文の対称性が崩れて損失が跳ねる（lr 1 は約20、0.3 は約100、0.2 は約500ステップ）。長く回すなら 0.1 を推奨")
     a = ap.parse_args()
     p, lr = load_params(a.params)
     lr = a.lr if a.lr is not None else lr
